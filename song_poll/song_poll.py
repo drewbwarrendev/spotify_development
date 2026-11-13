@@ -4,7 +4,7 @@ import sys
 import spotipy
 import spotipy.util as util
 import random
-import Tkinter as tk
+import tkinter as tk
 import json
 from subprocess import Popen, call
 import time
@@ -14,11 +14,11 @@ from operator import itemgetter
 
 
 ## Open Spotify so the songs can play
-if len(sys.argv) == 1:
-    spotify = Popen("/usr/bin/spotify")
+# if len(sys.argv) == 1:
+#     spotify = Popen("/usr/bin/spotify")
 
 # Set the environment variables through my alias
-call(['/bin/bash', '-i', '-c', 'spotify_song_poll_env'])
+# call(['/bin/bash', '-i', '-c', 'spotify_song_poll_env'])
 
 # My personal Spotify info
 scope = 'user-library-read streaming playlist-modify-public'
@@ -46,7 +46,7 @@ track_ids = []
 votes = [] # how many times thesong has been chosen
 at_bat = [] # how many times the song has been available to vote on
 scores = []
-
+ratings = []
 
 # Extract the track info from the playlist. Each item is in a very specific position of ...
 # the data structure returned by the sp.user_playlist_tracks() function
@@ -62,6 +62,7 @@ try:
         votes.append(row[3])
         at_bat.append(row[4])
         scores.append(row[5])
+        ratings.append(row[6])
     print('file found')
 except IOError:
     print('file not found')
@@ -100,7 +101,29 @@ for i,id in enumerate(id_check):
         votes.append(0)
         at_bat.append(0)
         scores.append(0)
+        ratings.append(1500)
         print(track_check[i] + ' added')
+
+# Remove songs that no longer exist in the Spotify playlist
+
+playlist_ids = set(id_check)
+
+keep_indices = [
+    i for i, song_id in enumerate(track_ids)
+    if song_id in playlist_ids
+]
+
+removed_count = len(track_ids) - len(keep_indices)
+
+tracks    = [tracks[i]    for i in keep_indices]
+artists   = [artists[i]   for i in keep_indices]
+track_ids = [track_ids[i] for i in keep_indices]
+votes     = [votes[i]     for i in keep_indices]
+at_bat    = [at_bat[i]    for i in keep_indices]
+scores    = [scores[i]    for i in keep_indices]
+ratings   = [ratings[i]   for i in keep_indices]
+
+print(f"{removed_count} songs removed from poll_results.json")
 
 # Clear unused variables
 del i, track_check, artist_check, id_check
@@ -149,6 +172,8 @@ if len(sys.argv) == 1:
         id1 = track_ids[ind1]
         id2 = track_ids[ind2]
 
+        print(song1, ratings[ind1])
+        print(song2, ratings[ind2])
         # Change the button text and pass the track info into the button_command
         button1.config(text=entry1, command=lambda: button_command(ind1,ind2))
         button2.config(text=entry2, command=lambda: button_command(ind2,ind1))
@@ -163,11 +188,23 @@ if len(sys.argv) == 1:
         at_bat[indLose] += 1
         # Increment the winning song
         votes[indWin] += 1
+        update_elo(indWin,indLose)
         voting_loop(button1, button2)
+
+    def update_elo(winner, loser, k=32):
+        global ratings
+        rw = ratings[winner]
+        rl = ratings[loser]
+        expected_winner = 1.0 / (1.0 + 10 ** ((rl - rw) / 400.0))
+        expected_loser = 1.0 / (1.0 + 10 ** ((rw - rl) / 400.0))
+        ratings[winner] = rw + k * (1 - expected_winner)
+        ratings[loser] = rl + k * (0 - expected_loser)
+        print(tracks[winner], ratings[winner])
+        print(tracks[loser], ratings[loser])
+
 
     # Define the function to play the songs using the play buttons
     def play_command(song_id):
-        print(song_id)
         new_id_list = [song_id]
         sp.start_playback(uris=new_id_list)
 
@@ -182,15 +219,17 @@ if len(sys.argv) == 1:
         global tracks, artists, track_ids, votes, at_bat
         poll = []
         for i in range(len(tracks)):
-            if at_bat[i] == 0 or votes[i] == 0:
-                score = 0
-            elif at_bat[i] > 0:
-                score = float(votes[i])*(1.0 + 10/float(at_bat[i]))
+            # if at_bat[i] == 0 or votes[i] == 0:
+            #     score = 1400
+            # elif at_bat[i] > 0:
+            #     # score = float(votes[i])*(1.0 + 10/float(at_bat[i]))
+            #     # score = ratings[i]
+            score = ratings[i] + float(votes[i])*(1.0 + 10/float(at_bat[i]))
             scores[i] = score
-            poll.append([tracks[i], artists[i], track_ids[i], votes[i], at_bat[i], score])
+            poll.append([tracks[i], artists[i], track_ids[i], votes[i], at_bat[i], score, ratings[i]])
         with open('poll_results.json', 'w') as write_file:
                 json.dump(poll, write_file, indent=4)
-        spotify.kill()
+        # spotify.kill()
         root.quit()
 
     # Initialize the two song buttons
@@ -214,39 +253,35 @@ if len(sys.argv) == 1:
     tk.Button(root, text='Quit', command=quit_command).grid(row=4, column=1)
     tk.mainloop()
 
-    # Save the results to a playlist
-    score_ind = sorted(range(len(scores)), key = lambda k: scores[k])
-    results = reversed(score_ind)
-    for i,ind in enumerate(results):
-        if i == 0:
-            sp.user_playlist_replace_tracks(username,results_playlist,[track_ids[ind]])
-        else:
-            sp.user_playlist_add_tracks(username,results_playlist,[track_ids[ind]])
+    
 
 #
 #****************************************************
 # Results
 #****************************************************
 #
-
-
-
-# Print some results
-
+# Save the results to a playlist
 score_ind = sorted(range(len(scores)), key = lambda k: scores[k])
-results = reversed(score_ind)
-    
-    
+results = list(reversed(score_ind))
+
 # Plot some of the results
 # Bar Graph of top 25 songs
 song_results = []
 score_results = []
-for i,ind in enumerate(results):
-    song_results.append(tracks[ind])
-    score_results.append(round(scores[ind],1))
-    if i >= 24:
-        break
 y_pos = np.arange(25)
+
+for i,ind in enumerate(results):
+    # save results to the playlist
+    if i == 0:
+        sp.user_playlist_replace_tracks(username,results_playlist,[track_ids[ind]])
+    else:
+        sp.user_playlist_add_tracks(username,results_playlist,[track_ids[ind]]) 
+    if i <= 24:
+        # Save results to the plotting lists
+        song_results.append(tracks[ind])
+        score_results.append(round(scores[ind],1))
+    
+
 
 fig = plt.figure(figsize=(20,10))
 ax = fig.add_subplot(1,1,1)
@@ -269,7 +304,7 @@ for i in range(len(Nartists)):
     artist_scores[Nartists[i]] = 0
 
 # Find the score of each song by an artist
-for artist, score in artist_scores.iteritems():
+for artist, score in artist_scores.items():
     Nsongs = 0
     indices = [i for i, x in enumerate(artists) if x == artist]
     for i,ind in enumerate(indices):
@@ -277,8 +312,9 @@ for artist, score in artist_scores.iteritems():
         score = score + scores[ind]
     if Nsongs == 0: # Catch the exception where the score is 0
         Nsongs = 1
-    score = Nsongs/2 + score / Nsongs   
+    score = Nsongs + score / Nsongs   
     artist_scores[artist] = round(score,1)
+    print(artist,artist_scores[artist])
 
 sorted_artists = sorted(artist_scores.items(), key=itemgetter(1))
 sorted_artists = reversed(sorted_artists)
