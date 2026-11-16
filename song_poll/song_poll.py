@@ -12,6 +12,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from operator import itemgetter
 
+# Helper functions
+def get_sorted_indices():
+    return sorted(
+        range(len(scores)),
+        key=lambda i: scores[i],
+        reverse=True
+    )
 
 ## Open Spotify so the songs can play
 # if len(sys.argv) == 1:
@@ -32,6 +39,10 @@ if not token:
     sys.exit()
 sp = spotipy.Spotify(auth=token)
 
+# Set up the Poll mode and start position
+poll_mode = "least_viewed"   # default
+sort_position = 0            # used for sort mode
+STATE_FILE = "poll_state.json"
 
 #
 #****************************************************
@@ -66,6 +77,55 @@ try:
     print('file found')
 except IOError:
     print('file not found')
+
+# Load the start position
+try:
+    with open(STATE_FILE, "r") as f:
+        state = json.load(f)
+        sort_position = state.get("sort_position", 0)
+except:
+    sort_position = 0
+
+# Select the poll mode
+# least voted vs random
+# OR
+# sorting method
+mode_window = tk.Tk()
+mode_window.title("Select Poll Mode")
+
+selected_mode = tk.StringVar(value="least_viewed")
+
+tk.Label(
+    mode_window,
+    text="Choose voting mode:"
+).pack(padx=20, pady=10)
+
+tk.Radiobutton(
+    mode_window,
+    text="Least Viewed vs Random",
+    variable=selected_mode,
+    value="least_viewed"
+).pack(anchor="w")
+
+tk.Radiobutton(
+    mode_window,
+    text="Sequential Score Sort",
+    variable=selected_mode,
+    value="score_sort"
+).pack(anchor="w")
+
+def launch_poll():
+    global poll_mode
+    poll_mode = selected_mode.get()
+    mode_window.destroy()
+
+tk.Button(
+    mode_window,
+    text="Start",
+    command=launch_poll
+).pack(pady=10)
+
+mode_window.mainloop()
 
 
 # Take the tracks from the playlist, check them agains the results file
@@ -148,19 +208,45 @@ if len(sys.argv) == 1:
 
     ## Start the voting loop
     def voting_loop(button1, button2):
-        # Select two random and unique tracks from the playlist
-        while(True):
-            minimum_votes = min(at_bat)
-            less_viewed_songs = [i for i,x in enumerate(at_bat) if x == minimum_votes]
-            if len(less_viewed_songs) > 1: # check how many songs are left
-                ind1 = random.choice(less_viewed_songs)  
-                ind2 = random.choice(range(len(tracks))) 
-                print(less_viewed_songs)
-            else:
-                ind1 = less_viewed_songs[0]
-                ind2 = random.choice(range(len(tracks)))
-            if ind1 != ind2:
-                break
+        global sort_position
+        # Pick one song from the list of least viewed songs, the other from the whole list
+        if poll_mode == "least_viewed":
+
+            while True:
+                minimum_votes = min(at_bat)
+
+                less_viewed_songs = [
+                    i for i, x in enumerate(at_bat)
+                    if x == minimum_votes
+                ]
+
+                if len(less_viewed_songs) > 1:
+                    ind1 = random.choice(less_viewed_songs)
+                    ind2 = random.choice(range(len(tracks)))
+                else:
+                    ind1 = less_viewed_songs[0]
+                    ind2 = random.choice(range(len(tracks)))
+
+                if ind1 != ind2:
+                    break
+        # Pick one song from the ranked list and the next one sequentially
+        else:
+
+            ranked = get_sorted_indices()
+
+            if len(ranked) < 2:
+                return
+
+            if sort_position >= len(ranked) - 1:
+                sort_position = 0
+
+            ind1 = ranked[sort_position]
+            ind2 = ranked[sort_position + 1]
+
+            print(
+                f"Sequential comparison {sort_position}: "
+                f"{tracks[ind1]} vs {tracks[ind2]}"
+            )
 
         # Collect the info about the tracks
         song1 = tracks[ind1]
@@ -189,6 +275,14 @@ if len(sys.argv) == 1:
         # Increment the winning song
         votes[indWin] += 1
         update_elo(indWin,indLose)
+        if poll_mode == "score_sort":
+            global sort_position
+            sort_position += 1
+
+            ranked = get_sorted_indices()
+
+            if sort_position >= len(ranked) - 1:
+                sort_position = 0
         voting_loop(button1, button2)
 
     def update_elo(winner, loser, k=32):
@@ -209,6 +303,12 @@ if len(sys.argv) == 1:
         sp.start_playback(uris=new_id_list)
 
     def skip_command():
+        global sort_position
+        if poll_mode == "score_sort":
+            ranked = get_sorted_indices()
+            sort_position += 1
+            if sort_position >= len(ranked) - 1:
+                sort_position = 0
         voting_loop(button1,button2)
 
     def pause_command():
@@ -223,10 +323,22 @@ if len(sys.argv) == 1:
             #     score = 1400
             # elif at_bat[i] > 0:
             #     # score = float(votes[i])*(1.0 + 10/float(at_bat[i]))
-            #     # score = ratings[i]
-            score = ratings[i] + float(votes[i])*(1.0 + 10/float(at_bat[i]))
+            score = ratings[i]
+            # score = ratings[i] + float(votes[i])*(1.0 + 10/float(at_bat[i]))
             scores[i] = score
             poll.append([tracks[i], artists[i], track_ids[i], votes[i], at_bat[i], score, ratings[i]])
+
+        # Write the sort position
+        with open(STATE_FILE, "w") as f:
+            json.dump(
+                {
+                    "sort_position": sort_position
+                },
+                f,
+                indent=4
+            )
+
+        # Write the poll results to a JSON file
         with open('poll_results.json', 'w') as write_file:
                 json.dump(poll, write_file, indent=4)
         # spotify.kill()
@@ -337,5 +449,7 @@ plt.ylabel('Score')
 plt.title('Top 25 Artists')
 fig.tight_layout()
 plt.show()
+
+
 
 
